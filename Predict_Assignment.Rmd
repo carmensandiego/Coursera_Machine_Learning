@@ -1,0 +1,136 @@
+---
+title: ''
+author: "L. Eyestone"
+date: "August 11, 2016"
+output: html_document
+---
+
+
+# Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+# Data Preparation and Basic Exploratory Analysis
+## 1. Import required libraries
+```{r echo=TRUE}
+library(caret)
+library(randomForest)
+library(gbm)
+library(ggplot2)
+library(parallel)
+library(doParallel)
+library(cluster)
+```
+
+## 2. Load the Data and Cleanup
+```{r echo=TRUE}
+download.file(url = "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", destfile = "pml-training.csv")
+download.file(url = "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", destfile = "pml-testing.csv")
+
+# Load the training and testing data set
+# Replace all missing values with "NA"
+pmlTraining <- read.csv("pml-training.csv", na.strings=c("NA","#DIV/0!", ""))
+
+pmlTesting <- read.csv("pml-testing.csv", na.strings=c("NA","#DIV/0!", ""))
+
+# Remove columns with all "NA" values
+pmlTraining<-pmlTraining[,colSums(is.na(pmlTraining)) == 0]
+pmlTesting <-pmlTesting[,colSums(is.na(pmlTesting)) == 0]
+
+
+# Remove columns that are unnecessary for the prediction model:
+colnames(pmlTraining[1:7])
+
+pmlTraining   <-pmlTraining[,-c(1:7)]
+pmlTesting <-pmlTesting[,-c(1:7)]
+
+# Remove the Near Zero Variance columns
+NZV <- nearZeroVar(pmlTraining,saveMetrics=TRUE) # freqCut = 90/10, 
+pmlTraining <- pmlTraining[,!NZV$nzv]
+pmlTesting <- pmlTesting[,!NZV$nzv]
+
+```
+
+## 3. Summarize the Data
+```{r echo=TRUE}
+# Show the data structure after the transforms
+str(pmlTraining)
+
+# Summarize the data
+summary(pmlTraining)
+
+```
+## 4. Cross-Validation Partitioning
+```{r echo=TRUE}
+# Set the seed for data reproducability
+set.seed(9876)
+
+# Partition the data into 75% training and 25% testing sets
+# using random subsampling without replacement
+inTrain <- createDataPartition(y=pmlTraining$classe, p=0.75, list=FALSE)
+trainData <- as.data.frame(pmlTraining[inTrain,])
+testData <- as.data.frame(pmlTraining[-inTrain,])
+dim(trainData)
+dim(testData)
+```
+# Modeling
+## 5. Train the data using the Random Forest classifier model and Boosting
+### Random Forest
+```{r echo=TRUE}
+# After painstakingly battling Windows and my laptop with limited memory and processors,
+# I found the ability to parallel process the random forest model in the 
+# train function here: (https://github.com/lgreski/datasciencectacontent/blob/master/markdown/pml-randomForestPerformance.md)
+# Detect number of cores and subtract 1 to avoid crashing your machine by keeping
+# your operating system functional
+cluster <- makeCluster(detectCores() - 1)
+registerDoParallel(cluster)
+
+# Set the train control to k-fold cross-validation and set the number of the quantity
+# of folds.
+ctrl <- trainControl(method="cv", number=5, allowParallel=TRUE)
+
+# Examine all variables in the trainData set to predict the classe variable
+pmlRF <- train(classe ~ ., data = trainData, method = "rf", trControl=ctrl)
+
+# Predict
+RFPred <- predict(pmlRF, testData)
+
+# Use the testData set to test the results
+confusionMatrix(RFPred, testData$classe)
+
+# Calculate out-of-sample error
+RFPred2 <- predict(pmlRF, testData)
+RFPred2
+pmlOOS <- sum(RFPred2 == testData$classe) / length(RFPred2)
+# Out of sample error:
+pmlOOS
+
+# Plot the importance of each variable used for the Random Forest Classifier model
+pmlRF_imp <- varImp(pmlRF)
+plot(pmlRF_imp)
+```
+
+### Boosting
+```{r echo=TRUE}
+# Examine all variables in the trainData set to predict the classe variable
+pmlGBM <- train(classe ~ ., data=trainData, method="gbm", trControl=ctrl, verbose=FALSE)
+
+# Predict
+GBMPred <- predict(pmlGBM, testData)
+
+# Use the testData set to test the results
+confusionMatrix(GBMPred, testData$classe)
+
+# Stop the cluster to release the CPUs.
+stopCluster(cluster)
+```
+
+##6. Choose the best model
+The Random Forest model is the best fit for the training data. The accuracy metric for the Random Forest model is 0.995 compared to the Boosting model at 0.965, which means that the Random Forest model will be more accurate at predicting the desired class for this data. The estimated out-of-sample error is 0.5%. There will be very little, if any, misclassified samples in the test data considering the high accuracy and low out-of-sample error.
+
+#Prediction
+##7. Apply the prediction model to the test dataset.
+```{r echo=TRUE}
+pred_test <- predict(pmlRF, pmlTesting)
+pred_test
+```
