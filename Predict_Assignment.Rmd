@@ -100,7 +100,7 @@ confusionMatrix(RFPred, testData$classe)
 
 # Calculate out-of-sample error
 RFPred2 <- predict(pmlRF, testData)
-RFPred2
+
 pmlOOS <- sum(RFPred2 == testData$classe) / length(RFPred2)
 # Out of sample error:
 pmlOOS
